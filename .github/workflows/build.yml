@@ -1,4 +1,4 @@
-name: Test Checkout
+name: Debug Git
 
 on:
   push:
@@ -6,47 +6,33 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  debug:
     runs-on: macos-14
     steps:
-      - name: Check workspace
+      - name: Basic test
         run: |
-          echo "HOME=$HOME"
-          echo "PWD=$(pwd)"
+          echo "Hello from runner"
+          uname -a
           echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          touch /tmp/test.txt && echo "OK: writable"
+          pwd
+          ls -la
 
-      - name: Clone repo (anonymous HTTPS)
+      - name: Test DNS + TCP
         run: |
-          git clone --depth 1 https://github.com/${{ github.repository }}.git .
-          echo "Clone success!"
-          git log --oneline -1
-          ls Makefile && echo "Makefile found"
+          echo "=== DNS test ==="
+          nslookup github.com 2>&1 || true
+          echo "=== TCP test ==="
+          curl -sI https://github.com 2>&1 | head -5 || true
+          echo "=== Git version ==="
+          git --version
 
-      - name: Setup Xcode
+      - name: Test git ls-remote (anonymous)
         run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-path
+          echo "Testing anonymous git access..."
+          GIT_CURL_VERBOSE=1 GIT_TRACE=1 git ls-remote --heads https://github.com/${{ github.repository }}.git 2>&1
 
-      - name: Setup Theos
+      - name: Test git clone (anonymous)
         run: |
-          THEOS=/opt/theos
-          git clone --depth 1 https://github.com/theos/theos.git $THEOS 2>&1
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          mkdir -p $THEOS/sdks
-          ln -sf "$SDK" "$THEOS/sdks/$(basename "$SDK")"
-          ls -la $THEOS/sdks/
-
-      - name: Install tools
-        run: |
-          brew install ldid xz 2>&1 || true
-          which ldid || echo "WARN: no ldid"
-
-      - name: Build
-        run: |
-          export THEOS=/opt/theos
-          export THEOS_PACKAGE_SCHEME=rootless
-          make clean 2>/dev/null || true
-          make FINALPACKAGE=1 DEBUG=0 STRIP=1 package 2>&1
-          echo "=== Result ==="
-          find . -name "*.deb" -ls 2>/dev/null || echo "No DEB found"
+          echo "Cloning..."
+          GIT_CURL_VERBOSE=1 git clone --depth 1 https://github.com/${{ github.repository }}.git /tmp/test-clone 2>&1
+          ls /tmp/test-clone/Makefile && echo "SUCCESS!"
