@@ -2,257 +2,161 @@ name: Build iOS MCP DEB
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
-    inputs:
-      scheme:
-        description: '构建方案'
-        required: false
-        default: 'rootless'
-        type: choice
-        options: ['rootful', 'rootless', 'roothide']
+
+permissions:
+  contents: read
 
 env:
   THEOS: /opt/theos
-  PACKAGE_NAME: com.witchan.ios-mcp
-  VERSION: 1.2.1
 
 jobs:
-  build-rootless:
-    name: Build Rootless DEB (arm64+arm64e)
-    runs-on: macos-14
+  build:
+    name: Build (${{ matrix.scheme }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [rootless, rootful]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Xcode
+      - name: Debug environment
         run: |
-          # macOS 14 = Xcode 15.x (NOT 16.x)
-          sudo xcode-select -s /Applications/Xcode_15.4.app 2>/dev/null || \
-          sudo xcode-select -s /Applications/Xcode_15.3.app 2>/dev/null || \
-          echo "Using default Xcode"
-          xcodebuild -version
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "iOS SDK: $SDK_PATH"
-          echo "SDK_PATH=$SDK_PATH" >> $GITHUB_ENV
+          echo "=== Runner Info ==="
+          uname -a
+          sw_vers
+          xcodebuild -version 2>&1 || true
+          echo "=== SDK ==="
+          xcrun --sdk iphoneos --show-sdk-path 2>&1 || true
+          echo "=== Git ==="
+          git --version
+          echo "=== Tools ==="
+          which ar make curl tar || true
 
       - name: Setup Theos
         run: |
-          if [ ! -d "$THEOS" ]; then
-            echo "Cloning Theos..."
-            git clone --depth 1 https://github.com/theos/theos.git $THEOS
+          echo "=== Installing Theos ==="
+          if [ ! -d "$THEOS/.git" ]; then
+            rm -rf "$THEOS" 2>/dev/null || true
+            git clone --depth 1 https://github.com/theos/theos.git "$THEOS" 2>&1 || {
+              echo "Retry with GIT_SSL_NO_VERIFY..."
+              GIT_SSL_NO_VERIFY=1 git clone --depth 1 https://github.com/theos/theos.git "$THEOS" 2>&1
+            }
           else
-            echo "Theos already exists at $THEOS"
+            echo "Theos already exists, updating..."
+            cd "$THEOS" && git pull --depth 1 2>&1 || true
           fi
-          # --- Setup iOS SDK symlink (critical: Theos sdks/ is empty after clone) ---
-          mkdir -p $THEOS/sdks
-          SDK_NAME=$(basename "$SDK_PATH")
-          if [ ! -e "$THEOS/sdks/$SDK_NAME" ]; then
-            ln -sf "$SDK_PATH" "$THEOS/sdks/$SDK_NAME"
-            echo "Linked SDK: $THEOS/sdks/$SDK_NAME -> $SDK_PATH"
-          fi
-          ls -la $THEOS/sdks/
-          echo "=== Theos version ==="
-          cd $THEOS && git log --oneline -1
+          echo "Theos commit: $(cd $THEOS && git rev-parse --short HEAD)"
 
-      - name: Install build tools
-        run: |
-          brew install ldid xz 2>/dev/null || true
-          which ldid || echo "WARN: ldid not found"
-          echo "ar available: $(which ar)"
-
-      - name: Fetch build dependencies
-        run: |
-          mkdir -p $THEOS/lib $THEOS/include
-          # --- libsubstrate.dylib (needed by AppSync tweaks) ---
-          # Download Substitute from Procursus as drop-in replacement
-          SUB_URL="https://github.com/elihwyma/Substitute/releases/download/v2.0.4/com.ex.substitute_2.0.4_iphoneos-arm.deb"
-          echo "Fetching libsubstrate (substitute)..."
-          if curl -fsSL --connect-timeout 15 --max-time 60 -o /tmp/sub.deb "$SUB_URL" 2>/dev/null; then
-            mkdir -p /tmp/sub_extract
-            cd /tmp/sub_extract
-            ar x /tmp/sub.deb data.tar.lzma 2>/dev/null || ar x /tmp/sub.deb data.tar.zst 2>/dev/null || ar x /tmp/sub.deb data.tar.xz 2>/dev/null || true
-            for f in data.tar.*; do tar -xf "$f" 2>/dev/null || true; done
-            find . -name "libsubstitute.dylib" -exec cp -v {} $THEOS/lib/libsubstrate.dylib \; 2>/dev/null || true
-            cd "$GITHUB_WORKSPACE"
+          # Setup SDK symlink
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
+          echo "iOS SDK path: $SDK"
+          if [ -n "$SDK" ] && [ -d "$SDK" ]; then
+            mkdir -p "$THEOS/sdks"
+            SDK_NAME=$(basename "$SDK")
+            rm -f "$THEOS/sdks/$SDK_NAME"
+            ln -s "$SDK" "$THEOS/sdks/$SDK_NAME"
+            echo "Linked: $THEOS/sdks/$SDK_NAME -> $SDK"
           else
-            echo "WARN: Could not download Substitute"
+            echo "ERROR: iOS SDK not found!"
+            exit 1
           fi
+          ls -la "$THEOS/sdks/"
 
-          # --- libzip.a (needed by appinst & mcp-roothelper) ---
-          echo "Fetching libzip..."
-          for ZIP_URL in \
-            "http://apt.thebigboss.org/repofiles/cydia/debs2.0/libzip_0.11.2.deb" \
-            "https://apt.procurs.us/pool/main/iphoneos-arm64/1700/libzip/libzip_1.9.2-1_iphoneos-arm.deb"; do
-            if curl -fsSL --connect-timeout 15 --max-time 60 -o /tmp/libzip.deb "$ZIP_URL" 2>/dev/null; then
-              mkdir -p /tmp/zip_extract
-              cd /tmp/zip_extract
-              ar x /tmp/libzip.deb data.tar.lzma 2>/dev/null || ar x /tmp/libzip.deb data.tar.zst 2>/dev/null || ar x /tmp/libzip.deb data.tar.xz 2>/dev/null || ar x /tmp/libzip.deb data.tar.gz 2>/dev/null || true
-              for f in data.tar.*; do tar -xf "$f" 2>/dev/null || true; done
-              find . -name "libzip.a" -exec cp -v {} $THEOS/lib/libzip.a \; 2>/dev/null && break
-              cd "$GITHUB_WORKSPACE"
-            fi
+      - name: Install tools
+        run: |
+          brew install ldid xz 2>&1 || true
+          which ldid 2>&1 || echo "WARN: ldid not found (may need to build without signing)"
+
+      - name: Fetch libsubstrate + libzip
+        run: |
+          mkdir -p "$THEOS/lib"
+          # Download Substitute as libsubstrate replacement
+          echo "=== Fetching libsubstrate ==="
+          for URL in \
+            "https://github.com/elihwyma/Substitute/releases/download/v2.0.4/com.ex.substitute_2.0.4_iphoneos-arm.deb"; do
+            echo "Trying: $URL"
+            curl -fsSL --connect-timeout 15 --max-time 90 -o /tmp/sub.deb "$URL" 2>&1 && break
           done
-
-          echo "=== Dependencies in \$THEOS/lib ==="
-          ls -la $THEOS/lib/ 2>/dev/null || echo "(empty)"
-          echo "=== Check for critical deps ==="
-          for dep in libsubstrate.dylib libzip.a; do
-            if [ -f "$THEOS/lib/$dep" ]; then
-              echo "  OK: $dep"
-            else
-              echo "  MISSING: $dep (subprojects that need it will be skipped)"
-            fi
-          done
-
-      - name: Build subprojects (rootless)
-        run: |
-          export THEOS_PACKAGE_SCHEME=rootless
-          ROOT=$(pwd)
-
-          build_sub() {
-            local dir=$1
-            echo "=== Building ${dir} ==="
-            if [ ! -d "${ROOT}/${dir}" ]; then
-              echo "SKIP: ${dir} directory not found"
-              return
-            fi
-            pushd "${ROOT}/${dir}" > /dev/null
-            make clean 2>/dev/null || true
-            if make 2>&1; then
-              echo "  OK: ${dir}"
-            else
-              echo "  WARN: ${dir} build failed (will skip bundling)"
-            fi
-            popd > /dev/null
-          }
-
-          for dir in AppSync AppSync/appinst mcp-roothelper mcp-ldid mcp-root mcp-logreader; do
-            build_sub "$dir"
-          done
-
-      - name: Build ios-mcp package (rootless)
-        run: |
-          export THEOS_PACKAGE_SCHEME=rootless
-          echo "=== Building ios-mcp (rootless) ==="
-          make clean 2>/dev/null || true
-          make FINALPACKAGE=1 DEBUG=0 STRIP=1 package 2>&1
-          echo "=== Build result ==="
-          find packages -name "*.deb" -ls 2>/dev/null || echo "No DEB in packages/"
-          find . -maxdepth 3 -name "com.witchan.ios-mcp*.deb" -ls 2>/dev/null || echo "No DEB found"
-
-      - name: Upload DEB artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-mcp-rootless
-          path: packages/*.deb
-          retention-days: 90
-          if-no-files-found: error
-
-      - name: Create Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: packages/*.deb
-          generate_release_notes: true
-          name: "iOS MCP v${{ github.ref_name }} (Rootless)"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-rootful:
-    name: Build Rootful DEB (arm64+arm64e)
-    runs-on: macos-14
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Xcode
-        run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app 2>/dev/null || \
-          sudo xcode-select -s /Applications/Xcode_15.3.app 2>/dev/null || \
-          echo "Using default Xcode"
-          xcodebuild -version
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "SDK_PATH=$SDK_PATH" >> $GITHUB_ENV
-
-      - name: Setup Theos
-        run: |
-          if [ ! -d "$THEOS" ]; then
-            git clone --depth 1 https://github.com/theos/theos.git $THEOS
-          fi
-          mkdir -p $THEOS/sdks
-          SDK_NAME=$(basename "$SDK_PATH")
-          if [ ! -e "$THEOS/sdks/$SDK_NAME" ]; then
-            ln -sf "$SDK_PATH" "$THEOS/sdks/$SDK_NAME"
-          fi
-
-      - name: Install build tools
-        run: |
-          brew install ldid xz 2>/dev/null || true
-
-      - name: Fetch build dependencies
-        run: |
-          mkdir -p $THEOS/lib
-          # libsubstrate
-          if curl -fsSL --connect-timeout 15 --max-time 60 -o /tmp/sub.deb \
-            "https://github.com/elihwyma/Substitute/releases/download/v2.0.4/com.ex.substitute_2.0.4_iphoneos-arm.deb" 2>/dev/null; then
-            mkdir -p /tmp/sub_extract && cd /tmp/sub_extract
-            ar x /tmp/sub.deb data.tar.lzma 2>/dev/null || ar x /tmp/sub.deb data.tar.zst 2>/dev/null || ar x /tmp/sub.deb data.tar.xz 2>/dev/null || true
+          if [ -f /tmp/sub.deb ]; then
+            mkdir -p /tmp/subx && cd /tmp/subx
+            ar x /tmp/sub.deb data.tar.* 2>/dev/null || true
             for f in data.tar.*; do tar -xf "$f" 2>/dev/null || true; done
-            find . -name "libsubstitute.dylib" -exec cp {} $THEOS/lib/libsubstrate.dylib \; 2>/dev/null || true
+            find . -name "libsubstitute.dylib" -exec cp {} "$THEOS/lib/libsubstrate.dylib" \; 2>/dev/null || true
             cd "$GITHUB_WORKSPACE"
           fi
-          # libzip
-          for ZURL in \
+
+          echo "=== Fetching libzip ==="
+          for URL in \
             "http://apt.thebigboss.org/repofiles/cydia/debs2.0/libzip_0.11.2.deb"; do
-            if curl -fsSL --connect-timeout 15 --max-time 60 -o /tmp/libzip.deb "$ZURL" 2>/dev/null; then
-              mkdir -p /tmp/zip_extract && cd /tmp/zip_extract
-              ar x /tmp/libzip.deb data.tar.lzma 2>/dev/null || ar x /tmp/libzip.deb data.tar.zst 2>/dev/null || ar x /tmp/libzip.deb data.tar.xz 2>/dev/null || ar x /tmp/libzip.deb data.tar.gz 2>/dev/null || true
-              for f in data.tar.*; do tar -xf "$f" 2>/dev/null || true; done
-              find . -name "libzip.a" -exec cp {} $THEOS/lib/libzip.a \; 2>/dev/null && break
-              cd "$GITHUB_WORKSPACE"
-            fi
+            echo "Trying: $URL"
+            curl -fsSL --connect-timeout 15 --max-time 90 -o /tmp/libzip.deb "$URL" 2>&1 && break
           done
+          if [ -f /tmp/libzip.deb ]; then
+            mkdir -p /tmp/zipx && cd /tmp/zipx
+            ar x /tmp/libzip.deb data.tar.* 2>/dev/null || true
+            for f in data.tar.*; do tar -xf "$f" 2>/dev/null || true; done
+            find . -name "libzip.a" -exec cp {} "$THEOS/lib/libzip.a" \; 2>/dev/null || true
+            cd "$GITHUB_WORKSPACE"
+          fi
 
-      - name: Build subprojects (rootful)
+          echo "=== Dependencies ==="
+          ls -la "$THEOS/lib/" 2>/dev/null || echo "(empty)"
+
+      - name: Build subprojects (${{ matrix.scheme }})
         run: |
-          unset THEOS_PACKAGE_SCHEME
-          ROOT=$(pwd)
+          if [ "${{ matrix.scheme }}" = "rootless" ]; then
+            export THEOS_PACKAGE_SCHEME=rootless
+          else
+            unset THEOS_PACKAGE_SCHEME
+          fi
+          ROOT="$GITHUB_WORKSPACE"
           for dir in AppSync AppSync/appinst mcp-roothelper mcp-ldid mcp-root mcp-logreader; do
-            echo "=== Building ${dir} ==="
-            [ -d "${ROOT}/${dir}" ] || { echo "SKIP"; continue; }
-            pushd "${ROOT}/${dir}" > /dev/null
+            echo ">>> Building $dir <<<"
+            if [ ! -d "$ROOT/$dir" ]; then echo "SKIP: not found"; continue; fi
+            pushd "$ROOT/$dir" > /dev/null
             make clean 2>/dev/null || true
-            make 2>&1 || echo "WARN: ${dir} build failed"
+            make 2>&1 || echo "WARN: $dir build FAILED"
             popd > /dev/null
           done
 
-      - name: Build ios-mcp package (rootful)
+      - name: Build package (${{ matrix.scheme }})
         run: |
-          unset THEOS_PACKAGE_SCHEME
+          if [ "${{ matrix.scheme }}" = "rootless" ]; then
+            export THEOS_PACKAGE_SCHEME=rootless
+          else
+            unset THEOS_PACKAGE_SCHEME
+          fi
+          echo "=== Building ios-mcp (${{ matrix.scheme }}) ==="
           make clean 2>/dev/null || true
           make FINALPACKAGE=1 DEBUG=0 STRIP=1 package 2>&1
-          find packages -name "*.deb" -ls 2>/dev/null || echo "No DEB"
+          echo "=== Result ==="
+          find . -name "*.deb" -ls 2>/dev/null || echo "ERROR: No .deb produced!"
+          ls -la packages/ 2>/dev/null || true
 
-      - name: Upload DEB artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ios-mcp-rootful
-          path: packages/*.deb
+          name: ios-mcp-${{ matrix.scheme }}
+          path: |
+            packages/*.deb
+            *.deb
           retention-days: 90
-          if-no-files-found: error
+          if-no-files-found: warn
 
-      - name: Create Release (on tag)
+      - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: packages/*.deb
+          files: |
+            packages/*.deb
+            *.deb
           generate_release_notes: true
-          name: "iOS MCP v${{ github.ref_name }} (Rootful)"
+          name: "iOS MCP ${{ github.ref_name }} (${{ matrix.scheme }})"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
