@@ -41,29 +41,28 @@ after-stage::
 	$(ECHO_NOTHING)cp prefs/entry/ios-mcp.plist "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/ios-mcp.plist"$(ECHO_END)
 	@# Bundle license and third-party notices for binary redistribution
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp"$(ECHO_END)
-	$(ECHO_NOTHING)cp LICENSE "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/LICENSE"$(ECHO_END)
-	$(ECHO_NOTHING)cp NOTICE "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/NOTICE"$(ECHO_END)
-	$(ECHO_NOTHING)cp THIRD_PARTY_NOTICES.md "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/THIRD_PARTY_NOTICES.md"$(ECHO_END)
-	$(ECHO_NOTHING)cp AppSync/LICENSE "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/GPL-3.0-AppSync.txt"$(ECHO_END)
-	$(ECHO_NOTHING)cp third_party/ldid/COPYING "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/AGPL-3.0-ldid.txt"$(ECHO_END)
-	@# Bundle mcp-appsync (bypass installd signature checks)
+	$(ECHO_NOTHING)cp LICENSE "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/LICENSE" 2>/dev/null || true$(ECHO_END)
+	$(ECHO_NOTHING)cp NOTICE "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/NOTICE" 2>/dev/null || true$(ECHO_END)
+	$(ECHO_NOTHING)cp THIRD_PARTY_NOTICES.md "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/THIRD_PARTY_NOTICES.md" 2>/dev/null || true$(ECHO_END)
+	$(ECHO_NOTHING)cp AppSync/LICENSE "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/GPL-3.0-AppSync.txt" 2>/dev/null || true$(ECHO_END)
+	$(ECHO_NOTHING)cp third_party/ldid/COPYING "$(THEOS_STAGING_DIR)/usr/share/doc/ios-mcp/AGPL-3.0-ldid.txt" 2>/dev/null || true$(ECHO_END)
+	@# Bundle mcp-appsync (bypass installd signature checks) - skip if not built
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries"$(ECHO_END)
-	$(ECHO_NOTHING)cp AppSync/.theos/obj/mcp-appsync-installd.dylib "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-installd.dylib"$(ECHO_END)
-	$(ECHO_NOTHING)cp AppSync/AppSyncUnified-installd/mcp-appsync-installd.plist "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-installd.plist"$(ECHO_END)
-	$(ECHO_NOTHING)cp AppSync/.theos/obj/mcp-appsync-frontboard.dylib "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-frontboard.dylib"$(ECHO_END)
-	$(ECHO_NOTHING)cp AppSync/AppSyncUnified-FrontBoard/mcp-appsync-frontboard.plist "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-frontboard.plist"$(ECHO_END)
-	@# Bundle mcp-appinst (CLI IPA installer)
+	$(ECHO_NOTHING)[ -f "AppSync/.theos/obj/mcp-appsync-installd.dylib" ] && cp AppSync/.theos/obj/mcp-appsync-installd.dylib "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-installd.dylib" || echo "  SKIP: mcp-appsync-installd.dylib not built"$(ECHO_END)
+	$(ECHO_NOTHING)cp AppSync/AppSyncUnified-installd/mcp-appsync-installd.plist "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-installd.plist" 2>/dev/null || true$(ECHO_END)
+	$(ECHO_NOTHING)[ -f "AppSync/.theos/obj/mcp-appsync-frontboard.dylib" ] && cp AppSync/.theos/obj/mcp-appsync-frontboard.dylib "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-frontboard.dylib" || echo "  SKIP: mcp-appsync-frontboard.dylib not built"$(ECHO_END)
+	$(ECHO_NOTHING)cp AppSync/AppSyncUnified-FrontBoard/mcp-appsync-frontboard.plist "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/mcp-appsync-frontboard.plist" 2>/dev/null || true$(ECHO_END)
+	@# Bundle mcp-appinst (CLI IPA installer) - skip if not built
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/bin"$(ECHO_END)
-	$(ECHO_NOTHING)cp AppSync/appinst/.theos/obj/mcp-appinst "$(THEOS_STAGING_DIR)/usr/bin/mcp-appinst"$(ECHO_END)
-	@# Bundle mcp-roothelper (CLI TrollStore RootHelper wrapper for roothide installs)
-	$(ECHO_NOTHING)cp mcp-roothelper/.theos/obj/mcp-roothelper "$(THEOS_STAGING_DIR)/usr/bin/mcp-roothelper"$(ECHO_END)
-	@# Bundle mcp-ldid (CLI fakesign helper)
-	$(ECHO_NOTHING)cp mcp-ldid/.theos/obj/mcp-ldid "$(THEOS_STAGING_DIR)/usr/bin/mcp-ldid"$(ECHO_END)
-	@# Bundle mcp-root (setuid root helper for running commands as root from mobile)
-	$(ECHO_NOTHING)cp mcp-root/.theos/obj/mcp-root "$(THEOS_STAGING_DIR)/usr/bin/mcp-root"$(ECHO_END)
-	$(ECHO_NOTHING)chmod 4755 "$(THEOS_STAGING_DIR)/usr/bin/mcp-root"$(ECHO_END)
-	@# Bundle mcp-logreader (unified system log reader via diagnosticd live stream)
-	$(ECHO_NOTHING)cp mcp-logreader/.theos/obj/mcp-logreader "$(THEOS_STAGING_DIR)/usr/bin/mcp-logreader"$(ECHO_END)
+	$(ECHO_NOTHING)[ -f "AppSync/appinst/.theos/obj/mcp-appinst" ] && cp AppSync/appinst/.theos/obj/mcp-appinst "$(THEOS_STAGING_DIR)/usr/bin/mcp-appinst" || echo "  SKIP: mcp-appinst not built"$(ECHO_END)
+	@# Bundle mcp-roothelper (CLI TrollStore RootHelper wrapper) - skip if not built
+	$(ECHO_NOTHING)[ -f "mcp-roothelper/.theos/obj/mcp-roothelper" ] && cp mcp-roothelper/.theos/obj/mcp-roothelper "$(THEOS_STAGING_DIR)/usr/bin/mcp-roothelper" || echo "  SKIP: mcp-roothelper not built"$(ECHO_END)
+	@# Bundle mcp-ldid (CLI fakesign helper) - skip if not built
+	$(ECHO_NOTHING)[ -f "mcp-ldid/.theos/obj/mcp-ldid" ] && cp mcp-ldid/.theos/obj/mcp-ldid "$(THEOS_STAGING_DIR)/usr/bin/mcp-ldid" || echo "  SKIP: mcp-ldid not built"$(ECHO_END)
+	@# Bundle mcp-root (setuid root helper) - skip if not built
+	$(ECHO_NOTHING)[ -f "mcp-root/.theos/obj/mcp-root" ] && cp mcp-root/.theos/obj/mcp-root "$(THEOS_STAGING_DIR)/usr/bin/mcp-root" && chmod 4755 "$(THEOS_STAGING_DIR)/usr/bin/mcp-root" || echo "  SKIP: mcp-root not built"$(ECHO_END)
+	@# Bundle mcp-logreader (unified system log reader) - skip if not built
+	$(ECHO_NOTHING)[ -f "mcp-logreader/.theos/obj/mcp-logreader" ] && cp mcp-logreader/.theos/obj/mcp-logreader "$(THEOS_STAGING_DIR)/usr/bin/mcp-logreader" || echo "  SKIP: mcp-logreader not built"$(ECHO_END)
 
 after-install::
 	install.exec "killall -9 SpringBoard"
