@@ -1,162 +1,46 @@
-name: Build iOS MCP DEB
+name: Test Checkout
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-env:
-  THEOS: /opt/theos
 
 jobs:
-  build:
-    name: Build (${{ matrix.scheme }})
-    runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        scheme: [rootless, rootful]
-
+  test-checkout:
+    runs-on: macos-14
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Debug environment
+      - name: Manual clone
         run: |
-          echo "=== Runner Info ==="
-          uname -a
-          sw_vers
-          xcodebuild -version 2>&1 || true
+          echo "=== Cloning ==="
+          git clone --depth 1 "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" .
+          echo "=== Clone done ==="
+          git log --oneline -1
+          ls -la
+
+      - name: Env check
+        run: |
+          echo "=== Xcode ==="
+          xcodebuild -version
           echo "=== SDK ==="
-          xcrun --sdk iphoneos --show-sdk-path 2>&1 || true
-          echo "=== Git ==="
-          git --version
-          echo "=== Tools ==="
-          which ar make curl tar || true
+          xcrun --sdk iphoneos --show-sdk-path
 
-      - name: Setup Theos
+      - name: Install Theos
         run: |
-          echo "=== Installing Theos ==="
-          if [ ! -d "$THEOS/.git" ]; then
-            rm -rf "$THEOS" 2>/dev/null || true
-            git clone --depth 1 https://github.com/theos/theos.git "$THEOS" 2>&1 || {
-              echo "Retry with GIT_SSL_NO_VERIFY..."
-              GIT_SSL_NO_VERIFY=1 git clone --depth 1 https://github.com/theos/theos.git "$THEOS" 2>&1
-            }
-          else
-            echo "Theos already exists, updating..."
-            cd "$THEOS" && git pull --depth 1 2>&1 || true
-          fi
-          echo "Theos commit: $(cd $THEOS && git rev-parse --short HEAD)"
-
-          # Setup SDK symlink
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
-          echo "iOS SDK path: $SDK"
-          if [ -n "$SDK" ] && [ -d "$SDK" ]; then
-            mkdir -p "$THEOS/sdks"
-            SDK_NAME=$(basename "$SDK")
-            rm -f "$THEOS/sdks/$SDK_NAME"
-            ln -s "$SDK" "$THEOS/sdks/$SDK_NAME"
-            echo "Linked: $THEOS/sdks/$SDK_NAME -> $SDK"
-          else
-            echo "ERROR: iOS SDK not found!"
-            exit 1
-          fi
-          ls -la "$THEOS/sdks/"
+          THEOS=/opt/theos
+          git clone --depth 1 https://github.com/theos/theos.git $THEOS
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p $THEOS/sdks
+          ln -sf "$SDK" "$THEOS/sdks/$(basename "$SDK")"
+          ls -la $THEOS/sdks/
 
       - name: Install tools
         run: |
-          brew install ldid xz 2>&1 || true
-          which ldid 2>&1 || echo "WARN: ldid not found (may need to build without signing)"
+          brew install ldid xz || true
+          which ldid
 
-      - name: Fetch libsubstrate + libzip
+      - name: Build test
         run: |
-          mkdir -p "$THEOS/lib"
-          # Download Substitute as libsubstrate replacement
-          echo "=== Fetching libsubstrate ==="
-          for URL in \
-            "https://github.com/elihwyma/Substitute/releases/download/v2.0.4/com.ex.substitute_2.0.4_iphoneos-arm.deb"; do
-            echo "Trying: $URL"
-            curl -fsSL --connect-timeout 15 --max-time 90 -o /tmp/sub.deb "$URL" 2>&1 && break
-          done
-          if [ -f /tmp/sub.deb ]; then
-            mkdir -p /tmp/subx && cd /tmp/subx
-            ar x /tmp/sub.deb data.tar.* 2>/dev/null || true
-            for f in data.tar.*; do tar -xf "$f" 2>/dev/null || true; done
-            find . -name "libsubstitute.dylib" -exec cp {} "$THEOS/lib/libsubstrate.dylib" \; 2>/dev/null || true
-            cd "$GITHUB_WORKSPACE"
-          fi
-
-          echo "=== Fetching libzip ==="
-          for URL in \
-            "http://apt.thebigboss.org/repofiles/cydia/debs2.0/libzip_0.11.2.deb"; do
-            echo "Trying: $URL"
-            curl -fsSL --connect-timeout 15 --max-time 90 -o /tmp/libzip.deb "$URL" 2>&1 && break
-          done
-          if [ -f /tmp/libzip.deb ]; then
-            mkdir -p /tmp/zipx && cd /tmp/zipx
-            ar x /tmp/libzip.deb data.tar.* 2>/dev/null || true
-            for f in data.tar.*; do tar -xf "$f" 2>/dev/null || true; done
-            find . -name "libzip.a" -exec cp {} "$THEOS/lib/libzip.a" \; 2>/dev/null || true
-            cd "$GITHUB_WORKSPACE"
-          fi
-
-          echo "=== Dependencies ==="
-          ls -la "$THEOS/lib/" 2>/dev/null || echo "(empty)"
-
-      - name: Build subprojects (${{ matrix.scheme }})
-        run: |
-          if [ "${{ matrix.scheme }}" = "rootless" ]; then
-            export THEOS_PACKAGE_SCHEME=rootless
-          else
-            unset THEOS_PACKAGE_SCHEME
-          fi
-          ROOT="$GITHUB_WORKSPACE"
-          for dir in AppSync AppSync/appinst mcp-roothelper mcp-ldid mcp-root mcp-logreader; do
-            echo ">>> Building $dir <<<"
-            if [ ! -d "$ROOT/$dir" ]; then echo "SKIP: not found"; continue; fi
-            pushd "$ROOT/$dir" > /dev/null
-            make clean 2>/dev/null || true
-            make 2>&1 || echo "WARN: $dir build FAILED"
-            popd > /dev/null
-          done
-
-      - name: Build package (${{ matrix.scheme }})
-        run: |
-          if [ "${{ matrix.scheme }}" = "rootless" ]; then
-            export THEOS_PACKAGE_SCHEME=rootless
-          else
-            unset THEOS_PACKAGE_SCHEME
-          fi
-          echo "=== Building ios-mcp (${{ matrix.scheme }}) ==="
+          export THEOS=/opt/theos
+          export THEOS_PACKAGE_SCHEME=rootless
           make clean 2>/dev/null || true
           make FINALPACKAGE=1 DEBUG=0 STRIP=1 package 2>&1
-          echo "=== Result ==="
-          find . -name "*.deb" -ls 2>/dev/null || echo "ERROR: No .deb produced!"
-          ls -la packages/ 2>/dev/null || true
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-mcp-${{ matrix.scheme }}
-          path: |
-            packages/*.deb
-            *.deb
-          retention-days: 90
-          if-no-files-found: warn
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            packages/*.deb
-            *.deb
-          generate_release_notes: true
-          name: "iOS MCP ${{ github.ref_name }} (${{ matrix.scheme }})"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          find . -name "*.deb" -ls
