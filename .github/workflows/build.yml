@@ -3,30 +3,35 @@ name: Test Checkout
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  test-checkout:
+  test:
     runs-on: macos-14
     steps:
-      - name: Manual clone
+      - name: Check workspace
         run: |
-          echo "=== Cloning ==="
-          git clone --depth 1 "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" .
-          echo "=== Clone done ==="
-          git log --oneline -1
-          ls -la
+          echo "HOME=$HOME"
+          echo "PWD=$(pwd)"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          touch /tmp/test.txt && echo "OK: writable"
 
-      - name: Env check
+      - name: Clone repo (anonymous HTTPS)
         run: |
-          echo "=== Xcode ==="
+          git clone --depth 1 https://github.com/${{ github.repository }}.git .
+          echo "Clone success!"
+          git log --oneline -1
+          ls Makefile && echo "Makefile found"
+
+      - name: Setup Xcode
+        run: |
           xcodebuild -version
-          echo "=== SDK ==="
           xcrun --sdk iphoneos --show-sdk-path
 
-      - name: Install Theos
+      - name: Setup Theos
         run: |
           THEOS=/opt/theos
-          git clone --depth 1 https://github.com/theos/theos.git $THEOS
+          git clone --depth 1 https://github.com/theos/theos.git $THEOS 2>&1
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           mkdir -p $THEOS/sdks
           ln -sf "$SDK" "$THEOS/sdks/$(basename "$SDK")"
@@ -34,13 +39,14 @@ jobs:
 
       - name: Install tools
         run: |
-          brew install ldid xz || true
-          which ldid
+          brew install ldid xz 2>&1 || true
+          which ldid || echo "WARN: no ldid"
 
-      - name: Build test
+      - name: Build
         run: |
           export THEOS=/opt/theos
           export THEOS_PACKAGE_SCHEME=rootless
           make clean 2>/dev/null || true
           make FINALPACKAGE=1 DEBUG=0 STRIP=1 package 2>&1
-          find . -name "*.deb" -ls
+          echo "=== Result ==="
+          find . -name "*.deb" -ls 2>/dev/null || echo "No DEB found"
