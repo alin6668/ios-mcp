@@ -1,0 +1,99 @@
+name: Build libmcp.dylib
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - '**.m'
+      - '**.h'
+      - '**.x'
+      - '.github/workflows/build-dylib.yml'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode & SDK info
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Compile libmcp.dylib
+        run: |
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK_PATH"
+
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -dynamiclib \
+            -o libmcp.dylib \
+            mcp_bridge.m \
+            MCPServer.m MCPLogger.m HIDManager.m ScreenManager.m \
+            ClipboardManager.m AppManager.m AccessibilityManager.m \
+            TextInputManager.m FileSystemManager.m LogManager.m OCRManager.m \
+            MCPProcessUtil.m MCPAXQueryContext.m MCPAXRemoteContextResolver.m \
+            MCPUIElementSerializer.m MCPUIElementsFacade.m \
+            MCPAXAttributeBridge.m MCPAXNodeSource.m \
+            -framework IOKit \
+            -framework UIKit \
+            -framework CoreGraphics \
+            -framework QuartzCore \
+            -framework MobileCoreServices \
+            -framework AVFoundation \
+            -framework Security \
+            -framework Vision \
+            -framework Foundation \
+            -install_name @rpath/libmcp.dylib \
+            -mios-version-min=14.0 \
+            -fobjc-arc \
+            -Wno-unused-function \
+            -Wno-deprecated-declarations \
+            -I.
+
+          echo "=== Build output ==="
+          ls -lh libmcp.dylib
+          file libmcp.dylib
+
+      - name: Verify exported symbols
+        run: |
+          echo "=== Exported symbols ==="
+          nm -gU libmcp.dylib | grep mcp_ || echo "No mcp_ symbols found (checking all)"
+          nm -gU libmcp.dylib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmcp.dylib
+          path: libmcp.dylib
+          retention-days: 30
+
+      - name: Create/Update Release (main branch only)
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: libmcp.dylib (latest)
+          tag_name: dylib-latest
+          files: libmcp.dylib
+          prerelease: false
+          body: |
+            ## libmcp.dylib (auto-built)
+
+            基于 [ios-mcp](https://github.com/witchan/ios-mcp) 编译的 C 桥接动态库。
+
+            - **编译时间**: ${{ github.event.head_commit.timestamp }}
+            - **提交**: ${{ github.sha }}
+            - **架构**: arm64
+            - **最低 iOS**: 14.0
+
+            ### 使用方式
+            放入 `resources/libs/ios/libmcp.dylib`，配合 `iosmcp` Go 包使用。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
