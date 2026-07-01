@@ -19,6 +19,13 @@
 #import <Foundation/Foundation.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <string.h>
+#include <errno.h>
+#include <dlfcn.h>
+
+extern char **environ;
 
 // ============================================================
 // JSON 序列化辅助
@@ -218,6 +225,28 @@ int mcp_launch_app(const char* bundle_id) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         NSString* err = nil;
         ok = [[AppManager sharedInstance] launchApp:bid error:&err];
+        if (!ok) {
+            // Fallback 1: SBSLaunchApplicationWithIdentifier (SpringBoardServices)
+            void* sbs = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_LAZY);
+            if (sbs) {
+                int (*SBSLaunch)(CFStringRef, Boolean) = dlsym(sbs, "SBSLaunchApplicationWithIdentifier");
+                if (SBSLaunch) {
+                    SBSLaunch((__bridge CFStringRef)bid, false);
+                    ok = YES;
+                }
+                dlclose(sbs);
+            }
+        }
+        if (!ok) {
+            // Fallback 2: posix_spawn open command (works with root)
+            char* argv[] = { "/usr/bin/open", (char*)bundle_id, NULL };
+            pid_t pid = 0;
+            if (posix_spawn(&pid, "/usr/bin/open", NULL, NULL, argv, NULL) == 0) {
+                int status;
+                waitpid(pid, &status, 0);
+                ok = (WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            }
+        }
     });
     return ok ? 0 : -1;
 }
@@ -512,30 +541,54 @@ int mcp_open_url(const char* url_string) {
 
 char* mcp_run_command(const char* command) {
     if (!command) return NULL;
-    NSString* cmd = [NSString stringWithUTF8String:command];
-    NSString* tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"mcp_cmd_%u.sh", arc4random()]];
-    [[NSString stringWithFormat:@"%@ 2>&1", cmd] writeToFile:tmpPath
-                                                  atomically:YES
-                                                    encoding:NSUTF8StringEncoding
-                                                       error:nil];
 
-    FILE* pipe = popen([[@"sh " stringByAppendingString:tmpPath] UTF8String], "r");
-    if (!pipe) {
-        [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
-        return NULL;
+    // Use posix_spawn with /bin/sh for reliable command execution
+    int pipeFDs[2];
+    if (pipe(pipeFDs) != 0) return NULL;
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, pipeFDs[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, pipeFDs[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, pipeFDs[0]);
+
+    // Build PATH for jailbreak environment
+    char *envp[] = {
+        "PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/var/jb/usr/bin:/var/jb/bin",
+        "HOME=/var/root",
+        NULL
+    };
+
+    char *argv[] = { "/bin/sh", "-c", (char*)command, NULL };
+    pid_t pid = 0;
+    int spawnRet = posix_spawn(&pid, "/bin/sh", &actions, NULL, argv, envp);
+
+    posix_spawn_file_actions_destroy(&actions);
+    close(pipeFDs[1]);
+
+    if (spawnRet != 0) {
+        close(pipeFDs[0]);
+        return strdup("");
     }
 
+    // Read output
     NSMutableData* data = [NSMutableData data];
     char buf[4096];
-    while (fgets(buf, sizeof(buf), pipe)) {
-        [data appendBytes:buf length:strlen(buf)];
+    ssize_t n;
+    while ((n = read(pipeFDs[0], buf, sizeof(buf))) > 0) {
+        [data appendBytes:buf length:n];
     }
-    pclose(pipe);
-    [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
+    close(pipeFDs[0]);
+
+    // Wait for child
+    int status;
+    waitpid(pid, &status, 0);
 
     NSString* output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    return output ? strdup([output UTF8String]) : NULL;
+    if (!output) {
+        output = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding] ?: @"";
+    }
+    return strdup([output UTF8String]);
 }
 
 // ============================================================
