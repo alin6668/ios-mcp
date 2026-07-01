@@ -4,21 +4,23 @@
 #ifndef ROOTHIDE_H
 #define ROOTHIDE_H
 
+#import <Foundation/Foundation.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Returns the jailbreak root path (e.g., /var/jb)
-const char* jbroot(const char* path);
+NSString* jbroot(NSString* path);
 
 // Returns the rootfs path
-const char* rootfs(const char* path);
+NSString* rootfs(NSString* path);
 
 // Skip the jbroot prefix if present
-const char* jbroot_skip(const char* path);
+NSString* jbroot_skip(NSString* path);
 
 // Returns jbroot prefix
-const char* jbroot_prefix(void);
+NSString* jbroot_prefix(void);
 
 #ifdef __cplusplus
 }
